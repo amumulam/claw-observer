@@ -1,7 +1,13 @@
 """
-WebSocket Client Module
+SSE (Server-Sent Events) Client Module
 
-Connects to the Sidecar WebSocket server and receives state changes.
+Connects to the Sidecar SSE server and receives state changes.
+
+SSE is a lightweight, HTTP-based push protocol that:
+- Works through firewalls and proxies (uses standard HTTP ports)
+- Auto-reconnects on disconnect
+- Is simpler than WebSocket
+- Is natively supported in browsers
 """
 
 import asyncio
@@ -9,21 +15,21 @@ import json
 import logging
 from typing import Optional, Callable, Any
 from datetime import datetime
-
-import websockets
-from websockets.exceptions import ConnectionClosed, InvalidStatusCode
+import urllib.request
+import urllib.error
 
 logger = logging.getLogger(__name__)
 
 
-class WebSocketClient:
+class SSEClient:
     """
-    WebSocket client for connecting to the Sidecar server.
+    SSE (Server-Sent Events) client for connecting to the Sidecar server.
 
     Features:
     - Auto-reconnect with exponential backoff
     - Event callbacks
     - Connection status tracking
+    - Heartbeat detection
     """
 
     def __init__(
@@ -31,12 +37,24 @@ class WebSocketClient:
         uri: str,
         auth_token: Optional[str] = None,
         max_reconnect_delay: int = 60,
+        connect_timeout: int = 10,
     ):
-        self.uri = uri
+        # Convert ws:// to http:// and wss:// to https://
+        if uri.startswith("ws://"):
+            uri = uri.replace("ws://", "http://", 1)
+        elif uri.startswith("wss://"):
+            uri = uri.replace("wss://", "https://", 1)
+
+        # Build SSE endpoint URI
+        if "?" in uri:
+            self.uri = f"{uri}&token={auth_token}" if auth_token else uri
+        else:
+            self.uri = f"{uri}/events?token={auth_token}" if auth_token else f"{uri}/events"
+
         self.auth_token = auth_token
         self.max_reconnect_delay = max_reconnect_delay
+        self.connect_timeout = connect_timeout
 
-        self._websocket: Optional[websockets.WebSocketClientProtocol] = None
         self._running = False
         self._connected = False
         self._reconnect_delay = 1.0
@@ -50,9 +68,11 @@ class WebSocketClient:
         self._messages_received = 0
         self._reconnect_count = 0
         self._last_message_time: Optional[datetime] = None
-
-        # Track if we've ever connected (to avoid flickering on initial connect)
         self._ever_connected = False
+
+        # Current connection
+        self._response: Optional[urllib.request.Addinfourl] = None
+        self._reader: Optional[any] = None
 
     def on_event(self, callback: Callable[[dict], None]) -> None:
         """Register callback for received events."""
@@ -85,7 +105,7 @@ class WebSocketClient:
 
     async def connect(self) -> None:
         """
-        Connect to the WebSocket server.
+        Connect to the SSE server.
 
         Auto-reconnects on failure.
         """
@@ -94,12 +114,6 @@ class WebSocketClient:
         while self._running:
             try:
                 await self._connect()
-            except ConnectionClosed:
-                logger.info("Connection closed")
-                self._handle_disconnect()
-            except InvalidStatusCode as e:
-                logger.error(f"Connection failed: {e}")
-                self._handle_disconnect()
             except Exception as e:
                 logger.error(f"Connection error: {e}")
                 self._handle_disconnect()
@@ -115,65 +129,193 @@ class WebSocketClient:
                 self._reconnect_count += 1
 
     async def _connect(self) -> None:
-        """Establish WebSocket connection."""
-        headers = {}
-        if self.auth_token:
-            headers["Authorization"] = f"Bearer {self.auth_token}"
-
+        """Establish SSE connection."""
         logger.info(f"Connecting to {self.uri}...")
 
-        async with websockets.connect(
-            self.uri,
-            extra_headers=headers,
-            ping_interval=30,
-            ping_timeout=10,
-        ) as websocket:
-            self._websocket = websocket
+        # Use aiohttp for async HTTP streaming
+        try:
+            import aiohttp
+        except ImportError:
+            logger.error("aiohttp not installed. Install with: pip install aiohttp")
+            # Fallback to synchronous approach
+            await self._connect_sync()
+            return
+
+        async with aiohttp.ClientSession() as session:
+            try:
+                async with session.get(self.uri, timeout=aiohttp.ClientTimeout(total=None)) as response:
+                    if response.status != 200:
+                        raise Exception(f"SSE server returned status {response.status}")
+
+                    self._connected = True
+                    self._ever_connected = True
+                    self._reconnect_delay = 1.0
+
+                    logger.info(f"Connected to {self.uri}")
+
+                    # Notify connect callbacks
+                    for callback in self._connect_callbacks:
+                        try:
+                            callback()
+                        except Exception as e:
+                            logger.error(f"Error in connect callback: {e}")
+
+                    # Read SSE events
+                    async for line in response.content:
+                        if not self._running:
+                            break
+
+                        line = line.decode("utf-8").strip()
+                        await self._process_sse_line(line)
+
+            except aiohttp.ClientError as e:
+                raise Exception(f"Connection failed: {e}")
+            finally:
+                self._connected = False
+
+    async def _connect_sync(self) -> None:
+        """Synchronous fallback for SSE connection."""
+        # Run synchronous connection in executor
+        loop = asyncio.get_event_loop()
+        await loop.run_in_executor(None, self._connect_sync_impl)
+
+    def _connect_sync_impl(self) -> None:
+        """Synchronous SSE connection implementation."""
+        logger.info(f"Connecting to {self.uri}...")
+
+        try:
+            # Build request with timeout
+            request = urllib.request.Request(self.uri)
+            request.add_header("Accept", "text/event-stream")
+            request.add_header("Cache-Control", "no-cache")
+
+            # Open connection
+            self._response = urllib.request.urlopen(request, timeout=self.connect_timeout)
+            self._reader = self._response
+
             self._connected = True
-            self._ever_connected = True  # Mark that we've successfully connected
-            self._reconnect_delay = 1.0  # Reset delay on successful connect
+            self._ever_connected = True
+            self._reconnect_delay = 1.0
 
             logger.info(f"Connected to {self.uri}")
 
-            # Notify connect callbacks
+            # Notify connect callbacks (in event loop)
+            loop = asyncio.get_event_loop()
             for callback in self._connect_callbacks:
                 try:
-                    callback()
+                    loop.call_soon_threadsafe(callback)
                 except Exception as e:
                     logger.error(f"Error in connect callback: {e}")
 
-            # Receive messages
-            await self._receive_messages()
+            # Read SSE events line by line
+            current_event = {}
+            last_heartbeat = time.time()
 
-    async def _receive_messages(self) -> None:
-        """Receive and process WebSocket messages."""
-        async for message in self._websocket:
-            if not self._running:
-                break
+            while self._running:
+                try:
+                    line = self._reader.readline().decode("utf-8").strip()
+                except Exception as e:
+                    # Connection error
+                    logger.error(f"Read error: {e}")
+                    break
 
-            try:
-                data = json.loads(message)
-                self._messages_received += 1
-                self._last_message_time = datetime.utcnow()
+                if not line:
+                    # Empty line = end of event
+                    if current_event.get("data"):
+                        self._dispatch_event(current_event)
+                    current_event = {}
+                    continue
 
-                # Notify event callbacks
-                for callback in self._event_callbacks:
-                    try:
-                        callback(data)
-                    except Exception as e:
-                        logger.error(f"Error in event callback: {e}")
+                if line.startswith(":"):
+                    # Comment/heartbeat
+                    last_heartbeat = time.time()
+                    continue
 
-            except json.JSONDecodeError:
-                logger.warning(f"Invalid JSON received: {message}")
+                if ":" in line:
+                    key, value = line.split(":", 1)
+                    key = key.strip()
+                    value = value.strip()
+
+                    if key == "event":
+                        current_event["type"] = value
+                    elif key == "data":
+                        current_event["data"] = value
+                    elif key == "id":
+                        current_event["id"] = value
+                    elif key == "retry":
+                        current_event["retry"] = int(value)
+
+        except Exception as e:
+            logger.error(f"Sync connection error: {e}")
+            raise
+        finally:
+            self._connected = False
+            if self._response:
+                self._response.close()
+
+    def _dispatch_event(self, event: dict) -> None:
+        """Dispatch an SSE event to callbacks."""
+        try:
+            data_str = event.get("data", "{}")
+            data = json.loads(data_str)
+            self._messages_received += 1
+            self._last_message_time = datetime.utcnow()
+
+            # Notify event callbacks
+            for callback in self._event_callbacks:
+                try:
+                    callback(data)
+                except Exception as e:
+                    logger.error(f"Error in event callback: {e}")
+        except json.JSONDecodeError:
+            logger.warning(f"Invalid JSON in event: {event.get('data')}")
+
+    async def _process_sse_line(self, line: str) -> None:
+        """Process a single SSE event line."""
+        # SSE format:
+        # : comment (heartbeat)
+        # event: event_type
+        # data: {json}
+        # id: event_id
+        # (blank line)
+
+        line = line.decode("utf-8").strip() if isinstance(line, bytes) else line.strip()
+
+        if not line:
+            # End of event - dispatch
+            if hasattr(self, "_current_event") and self._current_event:
+                self._dispatch_event(self._current_event)
+                self._current_event = {}
+            return
+
+        if line.startswith(":"):
+            # Comment/heartbeat - ignore
+            return
+
+        if ":" in line:
+            key, value = line.split(":", 1)
+            key = key.strip()
+            value = value.strip()
+
+            if not hasattr(self, "_current_event"):
+                self._current_event = {}
+
+            if key == "event":
+                self._current_event["type"] = value
+            elif key == "data":
+                self._current_event["data"] = value
+            elif key == "id":
+                self._current_event["id"] = value
+            elif key == "retry":
+                self._current_event["retry"] = int(value)
 
     def _handle_disconnect(self) -> None:
         """Handle disconnection."""
         if self._connected:
             self._connected = False
-            self._websocket = None
+            self._response = None
+            self._reader = None
 
-            # Only notify disconnect if we were previously connected
-            # This prevents flickering during initial connection attempts
             if self._ever_connected:
                 # Notify disconnect callbacks
                 for callback in self._disconnect_callbacks:
@@ -186,34 +328,21 @@ class WebSocketClient:
         """Disconnect from the server."""
         self._running = False
 
-        if self._websocket:
-            await self._websocket.close()
-            self._websocket = None
+        if self._response:
+            try:
+                self._response.close()
+            except Exception:
+                pass
 
         self._connected = False
         logger.info("Disconnected")
-
-    async def send(self, message: dict) -> None:
-        """Send a message to the server."""
-        if not self._connected or not self._websocket:
-            raise RuntimeError("Not connected")
-
-        await self._websocket.send(json.dumps(message))
-
-    async def send_ack(self, message_id: str) -> None:
-        """Send acknowledgment for a message."""
-        await self.send({
-            "type": "ack",
-            "message_id": message_id,
-            "received_at": datetime.utcnow().isoformat() + "Z",
-        })
 
 
 class StateClient:
     """
     High-level client for receiving state changes.
 
-    Wraps WebSocketClient and provides state-specific callbacks.
+    Wraps SSEClient and provides state-specific callbacks.
     """
 
     def __init__(
@@ -221,7 +350,7 @@ class StateClient:
         uri: str,
         auth_token: Optional[str] = None,
     ):
-        self._client = WebSocketClient(uri, auth_token)
+        self._client = SSEClient(uri, auth_token)
         self._current_state: Optional[str] = None
         self._state_callbacks: list[Callable[[str, str, dict], None]] = []
 
@@ -253,7 +382,22 @@ class StateClient:
         """Handle incoming event."""
         event_type = data.get("type", "")
 
-        if event_type == "state_change":
+        if event_type == "sync":
+            # Handle sync event - receive all current states
+            sync_data = data.get("data", {})
+            states = sync_data.get("states", {})
+            logger.info(f"Received sync: {len(states)} states")
+            for agent_id, state_data in states.items():
+                new_state = state_data.get("state", "")
+                if new_state:
+                    self._current_state = new_state
+                    for callback in self._state_callbacks:
+                        try:
+                            callback("", new_state, state_data)
+                        except Exception as e:
+                            logger.error(f"Error in sync callback: {e}")
+
+        elif event_type == "state_change":
             event_data = data.get("data", {})
             new_state = event_data.get("state", "")
             previous_state = event_data.get("previous_state", "")
@@ -290,7 +434,7 @@ class MultiAgentStateClient:
     """
     High-level client for receiving state changes from multiple agents.
 
-    Wraps WebSocketClient and provides multi-agent state callbacks.
+    Wraps SSEClient and provides multi-agent state callbacks.
     """
 
     def __init__(
@@ -298,7 +442,7 @@ class MultiAgentStateClient:
         uri: str,
         auth_token: Optional[str] = None,
     ):
-        self._client = WebSocketClient(uri, auth_token)
+        self._client = SSEClient(uri, auth_token)
         self._agent_states: dict[str, str] = {}  # {agent_id: state}
         self._state_callbacks: list[Callable[[str, str, str, dict], None]] = []
 
@@ -334,13 +478,24 @@ class MultiAgentStateClient:
         """Handle incoming event."""
         event_type = data.get("type", "")
 
-        if event_type == "state_change":
-            event_data = data.get("data", {})
-            agent_id = data.get("agent_id")
+        if event_type == "sync":
+            # Handle sync event - receive all current states
+            sync_data = data.get("data", {})
+            states = sync_data.get("states", {})
+            logger.info(f"Received sync: {len(states)} agent states")
+            for agent_id, state_data in states.items():
+                new_state = state_data.get("state", "")
+                if new_state:
+                    self._agent_states[agent_id] = new_state
+                    for callback in self._state_callbacks:
+                        try:
+                            callback(agent_id, "", new_state, state_data)
+                        except Exception as e:
+                            logger.error(f"Error in sync callback: {e}")
 
-            if not agent_id:
-                # Fallback to single-agent mode
-                agent_id = "default"
+        elif event_type == "state_change":
+            event_data = data.get("data", {})
+            agent_id = data.get("agent_id", "default")
 
             new_state = event_data.get("state", "")
             previous_state = event_data.get("previous_state", "")
@@ -372,3 +527,7 @@ class MultiAgentStateClient:
         client_stats["agent_count"] = len(self._agent_states)
         client_stats["agents"] = self._agent_states.copy()
         return client_stats
+
+
+# Import time for sync mode
+import time

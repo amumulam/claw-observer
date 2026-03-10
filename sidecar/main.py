@@ -14,7 +14,7 @@ from typing import Optional
 from .config import get_config, Config
 from .log_reader import create_log_reader, LogReader, MultiAgentLogReader
 from .parser import LogParser, MultiAgentLogParser
-from .ws_server import WebSocketServer
+from .ws_server import SSEServer, WebSocketServer
 from .rules.base import Event
 
 # Configure logging
@@ -45,7 +45,7 @@ class Sidecar:
 
         # Initialize components based on mode
         self._log_reader: Optional[LogReader] = None
-        self._ws_server = WebSocketServer(
+        self._ws_server = SSEServer(
             host=self.config.ws_host,
             port=self.config.ws_port,
             auth_enabled=self.config.auth_enabled,
@@ -104,9 +104,10 @@ class Sidecar:
         This is the main entry point.
         """
         self._running = True
-        logger.info(f"Starting Sidecar service on ws://{self.config.ws_host}:{self.config.ws_port}")
+        logger.info(f"Starting Sidecar service on http://{self.config.ws_host}:{self.config.ws_port}")
         logger.info(f"Log source: {self.config.log_source}")
         logger.info(f"Mode: {'multi-agent' if self.multi_agent else 'single-agent'}")
+        logger.info(f"Connect via: curl http://{self.config.ws_host}:{self.config.ws_port}/events")
 
         # Create log reader based on mode
         if self.multi_agent:
@@ -188,7 +189,7 @@ class Sidecar:
                 "mode": "multi-agent",
                 "agents": self._parser.get_all_states() if hasattr(self._parser, 'get_all_states') else {},
                 "agent_count": len(self._parser.get_agent_ids()) if hasattr(self._parser, 'get_agent_ids') else 0,
-                "clients": len(self._ws_server._clients),
+                "clients": len(self._ws_server._clients) if hasattr(self._ws_server, '_clients') else 0,
                 "stats": self._parser.stats,
             }
         else:
@@ -196,7 +197,7 @@ class Sidecar:
                 "running": self._running,
                 "mode": "single-agent",
                 "state": self._parser.current_state,
-                "clients": len(self._ws_server._clients),
+                "clients": len(self._ws_server._clients) if hasattr(self._ws_server, '_clients') else 0,
                 "stats": self._parser.stats,
             }
 
