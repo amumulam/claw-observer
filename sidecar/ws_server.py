@@ -327,17 +327,16 @@ class SSEServer:
 
         # Send initial sync event with current states
         if self._current_states:
-            sync_event = {
+            # Send sync format: {"type": "sync", "states": {agent_id: state_data}}
+            # The SSE "event:" field will be "sync", and data will be the JSON
+            sync_payload = {
                 "type": "sync",
-                "data": {
-                    "states": self._current_states.copy(),
-                    "timestamp": datetime.now(timezone.utc).isoformat(),
-                }
+                "states": self._current_states.copy(),
             }
             await self._send_sse_event(
                 writer,
                 event_type="sync",
-                data=json.dumps(sync_event),
+                data=json.dumps(sync_payload),
                 event_id="0",
             )
             await writer.drain()

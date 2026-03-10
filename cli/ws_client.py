@@ -480,14 +480,15 @@ class MultiAgentStateClient:
 
         if event_type == "sync":
             # Handle sync event - receive all current states
-            # Format: {"type": "sync", "data": {"states": {agent_id: state_data}}}
+            # Format: {"type": "sync", "data": {"states": {agent_id: state_data}, "timestamp": "..."}}
             sync_data = data.get("data", {})
             states = sync_data.get("states", {})
-            logger.info(f"Received sync: {len(states)} agent states")
+            logger.info(f"Received sync: {len(states)} agent states - {list(states.keys())}")
             for agent_id, state_data in states.items():
-                new_state = state_data.get("state", "")
+                new_state = state_data.get("state", "") if isinstance(state_data, dict) else ""
                 if new_state:
                     self._agent_states[agent_id] = new_state
+                    logger.info(f"  Agent {agent_id}: {new_state}")
                     for callback in self._state_callbacks:
                         try:
                             callback(agent_id, "", new_state, state_data)
