@@ -14,7 +14,7 @@ from typing import Optional
 from .config import get_config, Config
 from .log_reader import create_log_reader, LogReader, MultiAgentLogReader
 from .parser import LogParser, MultiAgentLogParser
-from .ws_server import SSEServer, WebSocketServer
+from .ws_server import SSEServer
 from .rules.base import Event
 
 # Configure logging
