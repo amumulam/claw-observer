@@ -22,10 +22,17 @@ from sidecar.main import Sidecar, get_config as get_sidecar_config
 
 app = typer.Typer(
     name="claw-observer",
-    help="OpenClaw Gateway Observer CLI",
+    help=f"OpenClaw Gateway Observer CLI v{__version__}",
     add_completion=False,
 )
 console = Console()
+
+# Get version from package metadata
+try:
+    from importlib.metadata import version
+    __version__ = version("claw-observer")
+except Exception:
+    __version__ = "0.1.0"
 
 # Global state
 _running = True
@@ -198,6 +205,12 @@ def serve(
         "--port",
         help="WebSocket server port",
     ),
+    quiet: bool = typer.Option(
+        False,
+        "--quiet",
+        "-q",
+        help="Quiet mode (minimal output)",
+    ),
 ):
     """
     Start the Observer service (Sidecar mode).
@@ -216,13 +229,19 @@ def serve(
         # Custom host and port
         claw-observer serve --host 127.0.0.1 --port 8765
     """
-    console.print("[green]Starting OpenClaw Observer service...[/green]")
+    if not quiet:
+        console.print(f"[green]Starting OpenClaw Observer service v{__version__}...[/green]")
+        console.print(f"  Log source: [cyan]{log_source}[/cyan]")
+        console.print(f"  WebSocket: [cyan]{host}:{port}[/cyan]")
 
     # Override config with command-line options
     import os
     os.environ["OPENCLAW_LOG_SOURCE"] = log_source
     os.environ["WS_HOST"] = host
     os.environ["WS_PORT"] = str(port)
+
+    if not quiet:
+        console.print("[bold green]✓ Service starting...[/bold green]\n")
 
     # Import and run sidecar
     from sidecar.main import main as sidecar_main
@@ -232,7 +251,7 @@ def serve(
     except KeyboardInterrupt:
         console.print("\n[yellow]Service stopped[/yellow]")
     except Exception as e:
-        console.print(f"[red]Error: {e}[/red]")
+        console.print(f"\n[bold red]✗ Error: {e}[/bold red]")
         sys.exit(1)
 
 

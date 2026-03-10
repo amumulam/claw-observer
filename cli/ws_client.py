@@ -51,6 +51,9 @@ class WebSocketClient:
         self._reconnect_count = 0
         self._last_message_time: Optional[datetime] = None
 
+        # Track if we've ever connected (to avoid flickering on initial connect)
+        self._ever_connected = False
+
     def on_event(self, callback: Callable[[dict], None]) -> None:
         """Register callback for received events."""
         self._event_callbacks.append(callback)
@@ -127,6 +130,7 @@ class WebSocketClient:
         ) as websocket:
             self._websocket = websocket
             self._connected = True
+            self._ever_connected = True  # Mark that we've successfully connected
             self._reconnect_delay = 1.0  # Reset delay on successful connect
 
             logger.info(f"Connected to {self.uri}")
@@ -168,12 +172,15 @@ class WebSocketClient:
             self._connected = False
             self._websocket = None
 
-            # Notify disconnect callbacks
-            for callback in self._disconnect_callbacks:
-                try:
-                    callback()
-                except Exception as e:
-                    logger.error(f"Error in disconnect callback: {e}")
+            # Only notify disconnect if we were previously connected
+            # This prevents flickering during initial connection attempts
+            if self._ever_connected:
+                # Notify disconnect callbacks
+                for callback in self._disconnect_callbacks:
+                    try:
+                        callback()
+                    except Exception as e:
+                        logger.error(f"Error in disconnect callback: {e}")
 
     async def disconnect(self) -> None:
         """Disconnect from the server."""
