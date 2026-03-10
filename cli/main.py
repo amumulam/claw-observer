@@ -17,6 +17,9 @@ from .ui_renderer import StateRenderer, SimpleRenderer
 from .tunnel import SSHTunnel
 from .config import get_config, CLIConfig
 
+# Import sidecar modules for serve command
+from sidecar.main import Sidecar, get_config as get_sidecar_config
+
 app = typer.Typer(
     name="claw-observer",
     help="OpenClaw Gateway Observer CLI",
@@ -176,6 +179,61 @@ def connect(
         stats = client.stats
         console.print(f"\n[yellow]Disconnected[/yellow]")
         console.print(f"Events received: {stats.get('messages_received', 0)}")
+
+
+@app.command()
+def serve(
+    log_source: str = typer.Option(
+        "auto",
+        "--log-source",
+        help="Log source: auto, file:/path, docker:container, journalctl:unit",
+    ),
+    host: str = typer.Option(
+        "0.0.0.0",
+        "--host",
+        help="WebSocket server host",
+    ),
+    port: int = typer.Option(
+        8765,
+        "--port",
+        help="WebSocket server port",
+    ),
+):
+    """
+    Start the Observer service (Sidecar mode).
+
+    Examples:
+
+        # Start with auto-detected log source
+        claw-observer serve
+
+        # Start with Docker container logs
+        claw-observer serve --log-source docker:openclaw-gateway
+
+        # Start with file logs
+        claw-observer serve --log-source file:/var/log/openclaw/gateway.log
+
+        # Custom host and port
+        claw-observer serve --host 127.0.0.1 --port 8765
+    """
+    console.print("[green]Starting OpenClaw Observer service...[/green]")
+
+    # Override config with command-line options
+    import os
+    os.environ["OPENCLAW_LOG_SOURCE"] = log_source
+    os.environ["WS_HOST"] = host
+    os.environ["WS_PORT"] = str(port)
+
+    # Import and run sidecar
+    from sidecar.main import main as sidecar_main
+
+    try:
+        asyncio.run(sidecar_main())
+    except KeyboardInterrupt:
+        console.print("\n[yellow]Service stopped[/yellow]")
+    except Exception as e:
+        console.print(f"[red]Error: {e}[/red]")
+        sys.exit(1)
 
 
 @app.command()
