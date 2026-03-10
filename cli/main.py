@@ -34,11 +34,12 @@ app = typer.Typer(
     add_completion=False,
     invoke_without_command=True,  # Allow running without subcommand
     no_args_is_help=False,  # Don't show help when no args (we handle it ourselves)
+    chain=True,  # Allow chaining
 )
 console = Console()
 
 
-@app.callback()
+@app.callback(invoke_without_command=True)
 def main_callback(ctx: typer.Context):
     """
     OpenClaw Gateway Observer CLI
@@ -47,20 +48,15 @@ def main_callback(ctx: typer.Context):
     """
     # If no subcommand is invoked, show the menu
     if ctx.invoked_subcommand is None:
-        menu()
+        _run_menu_interactive()
 
 # Global state
 _running = True
 _state_renderer: Optional[StateRenderer] = None
 
 
-@app.command()
-def menu():
-    """
-    OpenClaw Observer - Main Menu
-
-    Interactive menu to select and run commands.
-    """
+def _run_menu_interactive():
+    """Run the interactive menu - called from callback when no command given."""
     console.print("\n[bold]╔════════════════════════════════════════╗[/bold]")
     console.print("[bold]║   OpenClaw Gateway Observer v{version}   ║[/bold]".format(version=__version__))
     console.print("[bold]╚════════════════════════════════════════╝[/bold]\n")
@@ -92,6 +88,16 @@ def menu():
             break
         else:
             console.print("[red]Invalid choice, please try again[/red]")
+
+
+@app.command()
+def menu():
+    """
+    OpenClaw Observer - Main Menu
+
+    Interactive menu to select and run commands.
+    """
+    _run_menu_interactive()
 
 
 def _run_serve(config: dict) -> None:
@@ -387,7 +393,7 @@ def connect(
     """
     global _running, _state_renderer
 
-    # Show menu if no options provided
+    # Show interactive setup if no options provided or --interactive flag
     has_options = any([
         uri is not None,
         ssh is not None,
@@ -398,8 +404,9 @@ def connect(
     ])
 
     if not has_options:
-        # No arguments - show main menu instead
-        menu()
+        # No arguments - show connect interactive setup
+        conn_config = _interactive_connect_setup()
+        _run_connect(conn_config)
         return
 
     # Interactive mode if --interactive flag
@@ -417,40 +424,6 @@ def connect(
         }
 
     _run_connect(conn_config)
-
-    # Setup signal handler
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-
-    # Run the client
-    async def run():
-        # Start renderer
-        if _state_renderer:
-            _state_renderer.start()
-
-        try:
-            # Connect and run
-            await client.connect()
-        except Exception as e:
-            console.print(f"[red]Connection error: {e}[/red]")
-        finally:
-            # Cleanup
-            if _state_renderer:
-                _state_renderer.stop()
-
-            if tunnel:
-                await tunnel.stop()
-
-    # Run async
-    try:
-        asyncio.run(run())
-    except KeyboardInterrupt:
-        pass
-    finally:
-        # Print summary
-        stats = client.stats
-        console.print(f"\n[yellow]Disconnected[/yellow]")
-        console.print(f"Events received: {stats.get('messages_received', 0)}")
 
 
 @app.command()
@@ -514,7 +487,7 @@ def serve(
         # Quiet mode
         claw-observer serve -q
     """
-    # Show menu if no options provided
+    # Show interactive setup if no options provided
     has_options = any([
         log_source is not None,
         host is not None,
@@ -523,11 +496,13 @@ def serve(
         agents is not None,
         base_path is not None,
         interactive,
+        quiet,
     ])
 
     if not has_options:
-        # No arguments - show main menu instead
-        menu()
+        # No arguments - show serve interactive setup
+        config = _interactive_serve_setup()
+        _run_serve(config)
         return
 
     # Interactive mode if --interactive flag
