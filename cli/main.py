@@ -11,6 +11,7 @@ from typing import Optional
 
 import typer
 from rich.console import Console
+from typer import Context
 
 # Get version from package metadata (must be before app definition)
 try:
@@ -31,8 +32,22 @@ app = typer.Typer(
     name="claw-observer",
     help=f"OpenClaw Gateway Observer CLI v{__version__}",
     add_completion=False,
+    invoke_without_command=True,  # Allow running without subcommand
+    no_args_is_help=False,  # Don't show help when no args (we handle it ourselves)
 )
 console = Console()
+
+
+@app.callback()
+def main_callback(ctx: typer.Context):
+    """
+    OpenClaw Gateway Observer CLI
+
+    Run without arguments for interactive menu.
+    """
+    # If no subcommand is invoked, show the menu
+    if ctx.invoked_subcommand is None:
+        menu()
 
 # Global state
 _running = True
