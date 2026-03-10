@@ -12,6 +12,13 @@ from typing import Optional
 import typer
 from rich.console import Console
 
+# Get version from package metadata (must be before app definition)
+try:
+    from importlib.metadata import version
+    __version__ = version("claw-observer")
+except Exception:
+    __version__ = "0.1.0"
+
 from .ws_client import StateClient, MultiAgentStateClient
 from .ui_renderer import StateRenderer, SimpleRenderer, MultiAgentStateRenderer
 from .tunnel import SSHTunnel
@@ -26,13 +33,6 @@ app = typer.Typer(
     add_completion=False,
 )
 console = Console()
-
-# Get version from package metadata
-try:
-    from importlib.metadata import version
-    __version__ = version("claw-observer")
-except Exception:
-    __version__ = "0.1.0"
 
 # Global state
 _running = True
