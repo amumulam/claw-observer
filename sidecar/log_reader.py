@@ -255,7 +255,7 @@ class MultiAgentLogReader(LogReader):
         if key in self._known_sessions:
             return  # Already reading this session
 
-        logger.info(f"Starting reader for session: {key} ({session_path})")
+        logger.debug(f"Starting reader for session: {key} ({session_path})")
 
         reader = SessionFileReader(
             session_path=session_path,

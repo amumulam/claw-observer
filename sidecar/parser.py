@@ -278,19 +278,17 @@ class MultiAgentLogParser:
             agent_id = "default"
             log_line = line
 
-        self._lines_processed += 1
+        # Update agent stats
+        if agent_id not in self._agent_stats:
+            self._agent_stats[agent_id] = {"processed": 0, "matched": 0}
+        self._agent_stats[agent_id]["processed"] += 1
 
         # Try to match against rules
         event = self._rule_set.match(log_line)
 
         if event:
-            self._lines_matched += 1
-            logger.debug(f"Matched rule for agent {agent_id}: {log_line.strip()}")
-
-            # Update agent stats
-            if agent_id not in self._agent_stats:
-                self._agent_stats[agent_id] = {"processed": 0, "matched": 0}
             self._agent_stats[agent_id]["matched"] += 1
+            logger.debug(f"Matched rule for agent {agent_id}: {log_line.strip()}")
 
             # Process through state machine
             self._state_machine.process_event(
@@ -302,7 +300,6 @@ class MultiAgentLogParser:
 
             return (agent_id, event)
         else:
-            self._lines_unmatched += 1
             logger.debug(f"No match for agent {agent_id}: {log_line.strip()}")
             return None
 
