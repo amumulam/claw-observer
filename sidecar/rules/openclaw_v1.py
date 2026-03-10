@@ -1,12 +1,215 @@
 """
 OpenClaw Gateway Log Parsing Rules v1.0
 
-These rules parse OpenClaw Gateway logs and convert them to state events.
+These rules parse OpenClaw Gateway JSONL session logs and convert them to state events.
+
+JSONL Event Types:
+- session: New session started
+- message: User/Assistant/Tool message
+  - role: "user" → THINKING (Agent starts processing)
+  - role: "assistant" + stopReason: null → REPLYING (streaming)
+  - role: "assistant" + stopReason: "stop" → IDLE (completed)
+  - role: "toolResult" → EXECUTING (tool was executed)
+- model_change: Model switched
+- thinking_level_change: Thinking mode changed
 """
 
+import json
 import re
 from typing import Optional
 from .base import Rule, Event, RegexRule
+
+
+class OpenClawSessionStartRule(Rule):
+    """
+    Rule: Detect new session start
+
+    Matches JSONL lines like:
+    {"type":"session","id":"...","agentId":"main",...}
+
+    Extracts agent_id from the session data or file path context.
+    """
+
+    VERSION = "1.0"
+    PRIORITY = 50
+
+    @property
+    def name(self) -> str:
+        return "openclaw_session_start"
+
+    def match(self, line: str) -> Optional[Event]:
+        try:
+            data = json.loads(line.strip())
+            if data.get("type") == "session":
+                agent_id = data.get("agentId", "unknown")
+                return Event(
+                    event_type="session_start",
+                    state="IDLE",
+                    meta={
+                        "agent_id": agent_id,
+                        "session_id": data.get("id"),
+                    },
+                    raw_log=line.strip(),
+                )
+        except json.JSONDecodeError:
+            pass
+        return None
+
+
+class OpenClawUserMessageRule(Rule):
+    """
+    Rule: Detect user message (Agent starts thinking)
+
+    Matches JSONL lines like:
+    {"type":"message","message":{"role":"user","content":[...]},...}
+
+    State: IDLE → THINKING
+    """
+
+    VERSION = "1.0"
+    PRIORITY = 100
+
+    @property
+    def name(self) -> str:
+        return "openclaw_user_message"
+
+    def match(self, line: str) -> Optional[Event]:
+        try:
+            data = json.loads(line.strip())
+            if data.get("type") == "message":
+                msg = data.get("message", {})
+                if msg.get("role") == "user":
+                    # Extract agent_id from parentId pattern or context
+                    parent_id = data.get("parentId", "")
+                    return Event(
+                        event_type="state_change",
+                        state="THINKING",
+                        meta={
+                            "role": "user",
+                            "parent_id": parent_id,
+                            "message_id": data.get("id"),
+                        },
+                        raw_log=line.strip(),
+                    )
+        except json.JSONDecodeError:
+            pass
+        return None
+
+
+class OpenClawAssistantResponseRule(Rule):
+    """
+    Rule: Detect assistant response (REPLYING or IDLE)
+
+    Matches JSONL lines like:
+    {"type":"message","message":{"role":"assistant","content":[...],"stopReason":"stop"},...}
+
+    - stopReason: null or missing → REPLYING (streaming in progress)
+    - stopReason: "stop" → IDLE (completed)
+    """
+
+    VERSION = "1.0"
+    PRIORITY = 90
+
+    @property
+    def name(self) -> str:
+        return "openclaw_assistant_response"
+
+    def match(self, line: str) -> Optional[Event]:
+        try:
+            data = json.loads(line.strip())
+            if data.get("type") == "message":
+                msg = data.get("message", {})
+                if msg.get("role") == "assistant":
+                    stop_reason = msg.get("stopReason")
+                    # Extract usage info
+                    usage = msg.get("usage", {})
+
+                    if stop_reason == "stop":
+                        # Completed
+                        return Event(
+                            event_type="state_change",
+                            state="IDLE",
+                            meta={
+                                "role": "assistant",
+                                "stop_reason": stop_reason,
+                                "model": msg.get("model"),
+                                "tokens": usage.get("totalTokens", 0),
+                            },
+                            raw_log=line.strip(),
+                        )
+                    else:
+                        # Still streaming (stopReason is null or not "stop")
+                        return Event(
+                            event_type="state_change",
+                            state="REPLYING",
+                            meta={
+                                "role": "assistant",
+                                "stop_reason": stop_reason,
+                                "model": msg.get("model"),
+                            },
+                            raw_log=line.strip(),
+                        )
+        except json.JSONDecodeError:
+            pass
+        return None
+
+
+class OpenClawToolResultRule(Rule):
+    """
+    Rule: Detect tool result (EXECUTING)
+
+    Matches JSONL lines like:
+    {"type":"message","message":{"role":"toolResult","toolName":"browser",...},...}
+
+    State: → EXECUTING (tool was executed)
+    """
+
+    VERSION = "1.0"
+    PRIORITY = 95
+
+    @property
+    def name(self) -> str:
+        return "openclaw_tool_result"
+
+    def match(self, line: str) -> Optional[Event]:
+        try:
+            data = json.loads(line.strip())
+            if data.get("type") == "message":
+                msg = data.get("message", {})
+                if msg.get("role") == "toolResult":
+                    tool_name = msg.get("toolName", "unknown")
+                    tool_call_id = msg.get("toolCallId", "")
+                    details = msg.get("details", {})
+
+                    # Check if it was an error
+                    is_error = details.get("status") == "error" or msg.get("isError", False)
+                    error_msg = details.get("error", "")
+
+                    meta = {
+                        "role": "toolResult",
+                        "tool_name": tool_name,
+                        "tool_call_id": tool_call_id,
+                        "action": "executed",
+                    }
+
+                    if is_error:
+                        meta["error"] = error_msg
+                        return Event(
+                            event_type="error",
+                            state="ERROR",
+                            meta=meta,
+                            raw_log=line.strip(),
+                        )
+                    else:
+                        return Event(
+                            event_type="state_change",
+                            state="EXECUTING",
+                            meta=meta,
+                            raw_log=line.strip(),
+                        )
+        except json.JSONDecodeError:
+            pass
+        return None
 
 
 class OpenClawDispatchRule(Rule):
@@ -276,6 +479,12 @@ def create_openclaw_rules() -> list:
         List of Rule instances
     """
     return [
+        # JSONL-based rules (for OpenClaw session logs)
+        OpenClawUserMessageRule(),
+        OpenClawAssistantResponseRule(),
+        OpenClawToolResultRule(),
+        OpenClawSessionStartRule(),
+        # Legacy text-based rules (for gateway.log)
         OpenClawDispatchRule(),
         OpenClawStreamingStartRule(),
         OpenClawStreamingEndRule(),

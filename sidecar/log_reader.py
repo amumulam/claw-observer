@@ -400,3 +400,136 @@ def create_log_reader(
         docker_container=docker_container,
         systemd_unit=systemd_unit,
     )
+
+
+class MultiAgentLogReader(LogReader):
+    """
+    Reads logs from multiple OpenClaw agent directories.
+
+    Monitors JSONL session files in /root/.openclaw/agents/{agent-id}/sessions/
+    and extracts agent_id from the file path.
+
+    Usage:
+        reader = MultiAgentLogReader(agent_ids=["main", "baba", "dandan"])
+        async for line in reader.read_lines():
+            # line includes agent_id in the path context
+            print(line)
+    """
+
+    def __init__(
+        self,
+        base_path: str = "/root/.openclaw/agents",
+        agent_ids: Optional[list[str]] = None,
+        buffer_size: int = 1024,
+    ):
+        self.base_path = base_path
+        self.agent_ids = agent_ids  # If None, auto-discover
+        self.buffer_size = buffer_size
+        self._readers: dict[str, FileLogReader] = {}
+        self._tasks: dict[str, asyncio.Task] = {}
+        self._queue: asyncio.Queue = asyncio.Queue()
+        self._running = False
+
+    async def _discover_agents(self) -> list[str]:
+        """Discover agent directories."""
+        import os
+        if self.agent_ids:
+            return self.agent_ids
+
+        discovered = []
+        try:
+            if os.path.isdir(self.base_path):
+                for name in os.listdir(self.base_path):
+                    agent_path = os.path.join(self.base_path, name)
+                    if os.path.isdir(agent_path):
+                        sessions_dir = os.path.join(agent_path, "sessions")
+                        if os.path.isdir(sessions_dir):
+                            discovered.append(name)
+                            logger.info(f"Discovered agent: {name}")
+        except Exception as e:
+            logger.error(f"Error discovering agents: {e}")
+
+        return discovered
+
+    async def _read_agent_logs(self, agent_id: str) -> None:
+        """Read logs for a specific agent and queue with agent_id."""
+        import os
+        sessions_dir = os.path.join(self.base_path, agent_id, "sessions")
+
+        # Find the most recent JSONL file
+        try:
+            jsonl_files = []
+            if os.path.isdir(sessions_dir):
+                for f in os.listdir(sessions_dir):
+                    if f.endswith(".jsonl"):
+                        full_path = os.path.join(sessions_dir, f)
+                        jsonl_files.append((full_path, os.path.getmtime(full_path)))
+
+            if not jsonl_files:
+                logger.warning(f"No session files found for agent: {agent_id}")
+                return
+
+            # Sort by modification time, get the most recent
+            jsonl_files.sort(key=lambda x: x[1], reverse=True)
+            latest_file = jsonl_files[0][0]
+
+            logger.info(f"Monitoring {latest_file} for agent {agent_id}")
+
+            # Use tail -F on the latest file
+            reader = FileLogReader(latest_file)
+            self._readers[agent_id] = reader
+
+            async for line in reader.read_lines():
+                if not self._running:
+                    break
+                # Prepend agent_id to the line (tab-separated)
+                await self._queue.put(f"{agent_id}\t{line}")
+
+        except Exception as e:
+            logger.error(f"Error reading logs for agent {agent_id}: {e}")
+
+    async def read_lines(self) -> AsyncIterator[str]:
+        """Start reading from all agents and yield lines with agent_id prefix."""
+        self._running = True
+
+        # Discover agents
+        agent_ids = await self._discover_agents()
+        logger.info(f"Monitoring {len(agent_ids)} agents: {agent_ids}")
+
+        # Start reading from each agent
+        for agent_id in agent_ids:
+            task = asyncio.create_task(self._read_agent_logs(agent_id))
+            self._tasks[agent_id] = task
+
+        # Yield from queue
+        while self._running:
+            try:
+                line = await asyncio.wait_for(self._queue.get(), timeout=1.0)
+                yield line
+            except asyncio.TimeoutError:
+                continue
+            except Exception as e:
+                logger.error(f"Error reading from queue: {e}")
+                break
+
+    async def close(self) -> None:
+        """Close all readers."""
+        self._running = False
+
+        # Close all readers
+        for agent_id, reader in self._readers.items():
+            try:
+                await reader.close()
+            except Exception as e:
+                logger.warning(f"Error closing reader for agent {agent_id}: {e}")
+
+        # Cancel all tasks
+        for agent_id, task in self._tasks.items():
+            if not task.done():
+                task.cancel()
+                try:
+                    await task
+                except asyncio.CancelledError:
+                    pass
+
+        logger.info("MultiAgentLogReader closed")

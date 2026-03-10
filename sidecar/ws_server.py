@@ -278,6 +278,11 @@ class WebSocketServer:
         """Callback for parser events - pushes to WebSocket clients."""
         self.push_event(event)
 
+    def on_parser_event_multi(self, agent_id: str, event: Event) -> None:
+        """Callback for multi-agent parser events - adds agent_id and pushes."""
+        event.agent_id = agent_id
+        self.push_event(event)
+
     async def health_check(self) -> Dict[str, Any]:
         """Get health check status."""
         return {

@@ -203,3 +203,90 @@ class StateMachine:
             "history_count": len(self._history),
             "last_state": self._history[-1].previous_state.value if self._history else None,
         }
+
+
+class MultiAgentStateMachine:
+    """
+    Multi-agent state machine for tracking multiple OpenClaw agents.
+
+    Each agent has its own independent state machine.
+
+    Usage:
+        sm = MultiAgentStateMachine()
+        sm.on_state_change(lambda agent_id, change: print(f"{agent_id}: {change.previous_state} -> {change.new_state}"))
+        sm.process_event("main", Event(state="THINKING"))
+        sm.process_event("baba", Event(state="EXECUTING"))
+    """
+
+    def __init__(self, initial_state: State = State.IDLE):
+        self._initial_state = initial_state
+        self._agents: dict[str, StateMachine] = {}
+        self._listeners: List[Callable[[str, StateChange], None]] = []
+
+    def _get_or_create_agent(self, agent_id: str) -> StateMachine:
+        """Get or create a state machine for an agent."""
+        if agent_id not in self._agents:
+            logger.info(f"Creating new agent: {agent_id}")
+            sm = StateMachine(initial_state=self._initial_state)
+            sm.on_state_change(lambda change, aid=agent_id: self._notify_listeners(aid, change))
+            self._agents[agent_id] = sm
+        return self._agents[agent_id]
+
+    def _notify_listeners(self, agent_id: str, change: StateChange) -> None:
+        """Notify all listeners of a state change."""
+        for listener in self._listeners:
+            try:
+                listener(agent_id, change)
+            except Exception as e:
+                logger.error(f"Error in multi-agent state change listener: {e}")
+
+    def on_state_change(self, callback: Callable[[str, StateChange], None]) -> None:
+        """
+        Register a callback for state changes.
+
+        Callback receives: (agent_id, StateChange)
+        """
+        self._listeners.append(callback)
+
+    def process_event(self, agent_id: str, event_state: str, meta: Optional[dict] = None, raw_log: str = "") -> Optional[StateChange]:
+        """
+        Process an event for a specific agent.
+
+        Args:
+            agent_id: The agent ID
+            event_state: The target state from the event
+            meta: Additional metadata
+            raw_log: The raw log line
+
+        Returns:
+            StateChange if transition occurred, None otherwise
+        """
+        sm = self._get_or_create_agent(agent_id)
+        return sm.process_event(event_state, meta, raw_log)
+
+    def get_agent_state(self, agent_id: str) -> Optional[State]:
+        """Get the current state of an agent."""
+        if agent_id in self._agents:
+            return self._agents[agent_id].current_state
+        return self._initial_state
+
+    def get_all_states(self) -> dict[str, str]:
+        """Get states of all agents."""
+        return {
+            agent_id: sm.current_state.value
+            for agent_id, sm in self._agents.items()
+        }
+
+    def get_agent_ids(self) -> list[str]:
+        """Get list of all tracked agent IDs."""
+        return list(self._agents.keys())
+
+    def to_dict(self) -> dict:
+        """Convert all agent states to dictionary."""
+        return {
+            "agents": {
+                agent_id: sm.to_dict()
+                for agent_id, sm in self._agents.items()
+            },
+            "agent_count": len(self._agents),
+        }

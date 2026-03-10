@@ -12,8 +12,8 @@ from typing import Optional
 import typer
 from rich.console import Console
 
-from .ws_client import StateClient
-from .ui_renderer import StateRenderer, SimpleRenderer
+from .ws_client import StateClient, MultiAgentStateClient
+from .ui_renderer import StateRenderer, SimpleRenderer, MultiAgentStateRenderer
 from .tunnel import SSHTunnel
 from .config import get_config, CLIConfig
 
@@ -76,6 +76,11 @@ def connect(
         "--simple",
         help="Use simple text mode instead of rich UI",
     ),
+    multi: bool = typer.Option(
+        False,
+        "--multi",
+        help="Use multi-agent mode to display multiple agents",
+    ),
 ):
     """
     Connect to OpenClaw Observer Sidecar.
@@ -118,40 +123,61 @@ def connect(
         ws_uri = tunnel.local_uri
         console.print(f"[green]SSH tunnel established[/green]")
 
-    # Setup renderer
-    if simple:
-        _state_renderer = SimpleRenderer()
+    # Setup renderer and client based on mode
+    if multi:
+        # Multi-agent mode
+        _state_renderer = MultiAgentStateRenderer()
+        auth_token = token or config.auth_token
+        client = MultiAgentStateClient(ws_uri, auth_token)
+
+        def on_state_change(agent_id: str, previous_state: str, new_state: str, meta: dict):
+            if _state_renderer:
+                _state_renderer.update_state(agent_id, new_state, previous_state, meta)
+
+        def on_connect():
+            if _state_renderer:
+                _state_renderer.set_connection_status("connected")
+
+        def on_disconnect():
+            if _state_renderer:
+                _state_renderer.set_connection_status("disconnected")
+
+        client.on_state_change(on_state_change)
+        client._client.on_connect(on_connect)
+        client._client.on_disconnect(on_disconnect)
     else:
-        _state_renderer = StateRenderer()
+        # Single-agent mode
+        if simple:
+            _state_renderer = SimpleRenderer()
+        else:
+            _state_renderer = StateRenderer()
 
-    # Setup client
-    auth_token = token or config.auth_token
-    client = StateClient(ws_uri, auth_token)
+        auth_token = token or config.auth_token
+        client = StateClient(ws_uri, auth_token)
 
-    # Register callbacks
-    def on_state_change(previous_state: str, new_state: str, meta: dict):
-        if _state_renderer:
-            _state_renderer.update_state(new_state, previous_state, meta)
+        def on_state_change_single(previous_state: str, new_state: str, meta: dict):
+            if _state_renderer:
+                _state_renderer.update_state(new_state, previous_state, meta)
 
-            # Update tool details if available
-            if "tool_name" in meta:
-                _state_renderer.set_tool_details(
-                    meta.get("tool_name", ""),
-                    meta.get("action", ""),
-                    meta.get("params"),
-                )
+                # Update tool details if available
+                if "tool_name" in meta:
+                    _state_renderer.set_tool_details(
+                        meta.get("tool_name", ""),
+                        meta.get("action", ""),
+                        meta.get("params"),
+                    )
 
-    def on_connect():
-        if _state_renderer:
-            _state_renderer.set_connection_status("connected")
+        def on_connect_single():
+            if _state_renderer:
+                _state_renderer.set_connection_status("connected")
 
-    def on_disconnect():
-        if _state_renderer:
-            _state_renderer.set_connection_status("disconnected")
+        def on_disconnect_single():
+            if _state_renderer:
+                _state_renderer.set_connection_status("disconnected")
 
-    client.on_state_change(on_state_change)
-    client._client.on_connect(on_connect)
-    client._client.on_disconnect(on_disconnect)
+        client.on_state_change(on_state_change_single)
+        client._client.on_connect(on_connect_single)
+        client._client.on_disconnect(on_disconnect_single)
 
     # Setup signal handler
     signal.signal(signal.SIGINT, signal_handler)
@@ -205,6 +231,21 @@ def serve(
         "--port",
         help="WebSocket server port",
     ),
+    multi: bool = typer.Option(
+        False,
+        "--multi",
+        help="Enable multi-agent mode to monitor multiple OpenClaw agents",
+    ),
+    agents: Optional[str] = typer.Option(
+        None,
+        "--agents",
+        help="Comma-separated list of agent IDs to monitor (auto-discover if not specified)",
+    ),
+    base_path: str = typer.Option(
+        "/root/.openclaw/agents",
+        "--base-path",
+        help="Base path to OpenClaw agents directory",
+    ),
     quiet: bool = typer.Option(
         False,
         "--quiet",
@@ -228,17 +269,37 @@ def serve(
 
         # Custom host and port
         claw-observer serve --host 127.0.0.1 --port 8765
+
+        # Multi-agent mode (monitor all agents)
+        claw-observer serve --multi
+
+        # Multi-agent mode with specific agents
+        claw-observer serve --multi --agents main,baba,dandan
     """
     if not quiet:
         console.print(f"[green]Starting OpenClaw Observer service v{__version__}...[/green]")
+        console.print(f"  Mode: [cyan]{'multi-agent' if multi else 'single-agent'}[/cyan]")
         console.print(f"  Log source: [cyan]{log_source}[/cyan]")
         console.print(f"  WebSocket: [cyan]{host}:{port}[/cyan]")
+        if multi:
+            console.print(f"  Base path: [cyan]{base_path}[/cyan]")
+            if agents:
+                console.print(f"  Agents: [cyan]{agents}[/cyan]")
+            else:
+                console.print(f"  Agents: [cyan]auto-discover[/cyan]")
 
     # Override config with command-line options
     import os
-    os.environ["OPENCLAW_LOG_SOURCE"] = log_source
     os.environ["WS_HOST"] = host
     os.environ["WS_PORT"] = str(port)
+
+    if multi:
+        os.environ["OPENCLAW_MULTI_AGENT"] = "true"
+        os.environ["OPENCLAW_BASE_PATH"] = base_path
+        if agents:
+            os.environ["OPENCLAW_AGENT_IDS"] = agents
+    else:
+        os.environ["OPENCLAW_LOG_SOURCE"] = log_source
 
     if not quiet:
         console.print("[bold green]✓ Service starting...[/bold green]\n")

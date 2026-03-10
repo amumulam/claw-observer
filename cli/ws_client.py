@@ -284,3 +284,91 @@ class StateClient:
         client_stats = self._client.stats
         client_stats["current_state"] = self._current_state
         return client_stats
+
+
+class MultiAgentStateClient:
+    """
+    High-level client for receiving state changes from multiple agents.
+
+    Wraps WebSocketClient and provides multi-agent state callbacks.
+    """
+
+    def __init__(
+        self,
+        uri: str,
+        auth_token: Optional[str] = None,
+    ):
+        self._client = WebSocketClient(uri, auth_token)
+        self._agent_states: dict[str, str] = {}  # {agent_id: state}
+        self._state_callbacks: list[Callable[[str, str, str, dict], None]] = []
+
+        # Register event handler
+        self._client.on_event(self._handle_event)
+
+    def on_state_change(
+        self,
+        callback: Callable[[str, str, str, dict], None],
+    ) -> None:
+        """
+        Register callback for state changes.
+
+        Callback receives: (agent_id, previous_state, new_state, meta)
+        """
+        self._state_callbacks.append(callback)
+
+    @property
+    def agent_states(self) -> dict[str, str]:
+        """Get states of all agents."""
+        return self._agent_states.copy()
+
+    def get_agent_state(self, agent_id: str) -> Optional[str]:
+        """Get the current state of a specific agent."""
+        return self._agent_states.get(agent_id)
+
+    @property
+    def is_connected(self) -> bool:
+        """Check if connected."""
+        return self._client.is_connected
+
+    def _handle_event(self, data: dict) -> None:
+        """Handle incoming event."""
+        event_type = data.get("type", "")
+
+        if event_type == "state_change":
+            event_data = data.get("data", {})
+            agent_id = data.get("agent_id")
+
+            if not agent_id:
+                # Fallback to single-agent mode
+                agent_id = "default"
+
+            new_state = event_data.get("state", "")
+            previous_state = event_data.get("previous_state", "")
+            meta = event_data.copy()
+            meta.pop("state", None)
+            meta.pop("previous_state", None)
+
+            self._agent_states[agent_id] = new_state
+
+            # Notify callbacks
+            for callback in self._state_callbacks:
+                try:
+                    callback(agent_id, previous_state, new_state, meta)
+                except Exception as e:
+                    logger.error(f"Error in state callback: {e}")
+
+    async def connect(self) -> None:
+        """Connect to the server."""
+        await self._client.connect()
+
+    async def disconnect(self) -> None:
+        """Disconnect from the server."""
+        await self._client.disconnect()
+
+    @property
+    def stats(self) -> dict:
+        """Get client statistics."""
+        client_stats = self._client.stats
+        client_stats["agent_count"] = len(self._agent_states)
+        client_stats["agents"] = self._agent_states.copy()
+        return client_stats

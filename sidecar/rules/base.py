@@ -23,10 +23,11 @@ class Event:
     meta: Dict[str, Any] = field(default_factory=dict)
     raw_log: str = ""
     instance_id: str = "openclaw-gateway-1"
+    agent_id: Optional[str] = None  # For multi-agent mode
 
     def to_dict(self) -> Dict[str, Any]:
         """Convert event to dictionary for JSON serialization."""
-        return {
+        result = {
             "type": self.event_type,
             "timestamp": self.timestamp,
             "instance_id": self.instance_id,
@@ -36,6 +37,10 @@ class Event:
                 **self.meta,
             },
         }
+        # Include agent_id if present
+        if self.agent_id:
+            result["agent_id"] = self.agent_id
+        return result
 
     def to_json(self) -> str:
         """Convert event to JSON string."""

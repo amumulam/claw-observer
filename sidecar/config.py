@@ -37,6 +37,11 @@ class Config:
             "docker_container": "openclaw-gateway",
             "buffer_size": 1024,
         },
+        "multi_agent": {
+            "enabled": False,
+            "base_path": "/root/.openclaw/agents",
+            "agent_ids": None,  # None = auto-discover, or list of IDs
+        },
         "monitoring": {
             "health_check_enabled": True,
             "metrics_enabled": True,
@@ -81,6 +86,9 @@ class Config:
             "OPENCLAW_DOCKER_CONTAINER": ("log_reader", "docker_container"),
             "LOG_LEVEL": ("logging", "level"),
             "HEARTBEAT_INTERVAL": ("monitoring", "heartbeat_interval"),
+            "OPENCLAW_MULTI_AGENT": ("multi_agent", "enabled"),
+            "OPENCLAW_BASE_PATH": ("multi_agent", "base_path"),
+            "OPENCLAW_AGENT_IDS": ("multi_agent", "agent_ids"),  # Comma-separated
         }
 
         for env_var, (section, key) in env_mapping.items():
@@ -91,6 +99,9 @@ class Config:
                     value = value.lower() == "true"
                 elif value.isdigit():
                     value = int(value)
+                elif key == "agent_ids" and value:
+                    # Parse comma-separated list
+                    value = [x.strip() for x in value.split(",") if x.strip()]
 
                 if section not in self._config:
                     self._config[section] = {}
@@ -146,6 +157,21 @@ class Config:
     @property
     def log_level(self) -> str:
         return self.get("logging", "level", "INFO")
+
+    @property
+    def multi_agent_enabled(self) -> bool:
+        return bool(self.get("multi_agent", "enabled", False))
+
+    @property
+    def multi_agent_ids(self) -> Optional[list]:
+        agent_ids = self.get("multi_agent", "agent_ids", None)
+        if isinstance(agent_ids, str):
+            return [x.strip() for x in agent_ids.split(",") if x.strip()]
+        return agent_ids
+
+    @property
+    def openclaw_base_path(self) -> str:
+        return self.get("multi_agent", "base_path", "/root/.openclaw/agents")
 
 
 # Global config instance (lazy loaded)
