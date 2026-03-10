@@ -1,0 +1,46 @@
+# OpenClaw Gateway Log Samples
+
+These are sample logs for testing the parser rules.
+
+## Normal Flow
+
+```
+2024-01-15 10:30:00 INFO [gateway] dispatching request
+2024-01-15 10:30:00 INFO [llm] Started streaming
+2024-01-15 10:30:05 INFO [llm] Closed streaming
+2024-01-15 10:30:05 INFO [gateway] dispatch complete
+```
+
+## With Tool Execution
+
+```
+2024-01-15 10:30:00 INFO [gateway] dispatching request
+2024-01-15 10:30:00 INFO [llm] Started streaming
+2024-01-15 10:30:02 INFO [tools] browser executing: navigate
+2024-01-15 10:30:05 INFO [tools] browser completed
+2024-01-15 10:30:10 INFO [llm] Closed streaming
+2024-01-15 10:30:10 INFO [gateway] dispatch complete
+```
+
+## Tool Failure
+
+```
+2024-01-15 10:30:00 INFO [gateway] dispatching request
+2024-01-15 10:30:00 INFO [llm] Started streaming
+2024-01-15 10:30:02 INFO [tools] exec executing: ls -la
+2024-01-15 10:30:03 INFO [tools] exec failed: Command aborted
+2024-01-15 10:30:03 ERROR: Tool execution failed
+```
+
+## Complex Flow (Multiple Tools)
+
+```
+2024-01-15 10:30:00 INFO [gateway] dispatching request
+2024-01-15 10:30:00 INFO [llm] Started streaming
+2024-01-15 10:30:02 INFO [tools] browser executing: https://example.com
+2024-01-15 10:30:05 INFO [tools] browser completed
+2024-01-15 10:30:06 INFO [tools] exec executing: cat file.txt
+2024-01-15 10:30:07 INFO [tools] exec completed
+2024-01-15 10:30:10 INFO [llm] Closed streaming
+2024-01-15 10:30:10 INFO [gateway] dispatch complete
+```

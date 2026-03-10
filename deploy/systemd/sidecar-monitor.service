@@ -1,0 +1,57 @@
+[Unit]
+Description=Claw Observer Sidecar
+After=network.target openclaw-gateway.service
+Wants=network.target
+
+[Service]
+Type=simple
+User=openclaw
+Group=openclaw
+
+# Working directory
+WorkingDirectory=/opt/claw-observer
+
+# Environment
+Environment=PATH=/opt/claw-observer/venv/bin
+Environment=PYTHONUNBUFFERED=1
+
+# Log source configuration
+Environment=OPENCLAW_LOG_SOURCE=file:/var/log/openclaw/gateway.log
+Environment=OPENCLAW_LOG_PATH=/var/log/openclaw/gateway.log
+
+# WebSocket server configuration
+Environment=WS_HOST=0.0.0.0
+Environment=WS_PORT=8765
+
+# Security (change these!)
+Environment=JWT_SECRET=change-me-in-production
+Environment=AUTH_ENABLED=false
+
+# Logging
+Environment=LOG_LEVEL=INFO
+
+# Start command
+ExecStart=/opt/sidecar-monitor/venv/bin/python -m sidecar.main
+
+# Restart policy
+Restart=always
+RestartSec=5
+
+# Output to journal
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=claw-observer
+
+# Security hardening
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=/var/log/claw-observer
+PrivateTmp=true
+
+# Resource limits
+LimitNOFILE=65536
+LimitNPROC=64
+
+[Install]
+WantedBy=multi-user.target

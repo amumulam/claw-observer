@@ -1,0 +1,67 @@
+version: '3.8'
+
+services:
+  # OpenClaw Gateway (reference - configure separately)
+  # openclaw-gateway:
+  #   image: openclaw/gateway:latest
+  #   container_name: openclaw-gateway
+  #   restart: unless-stopped
+
+  # Sidecar Monitor
+  sidecar-monitor:
+    build:
+      context: ..
+      dockerfile: deploy/Dockerfile.sidecar
+    container_name: sidecar-monitor
+    ports:
+      - "8765:8765"
+    volumes:
+      # Mount rules directory (optional - for custom rules)
+      - ./rules:/app/rules:ro
+      # Mount log source (adjust based on your setup)
+      - /var/log/openclaw:/var/log/openclaw:ro
+      # Or for Docker logs access:
+      # - /var/run/docker.sock:/var/run/docker.sock:ro
+    environment:
+      # Log source configuration
+      - OPENCLAW_LOG_SOURCE=${LOG_SOURCE:-auto}
+      - OPENCLAW_LOG_PATH=${LOG_PATH:-/var/log/openclaw/gateway.log}
+      - OPENCLAW_DOCKER_CONTAINER=${DOCKER_CONTAINER:-openclaw-gateway}
+
+      # WebSocket server configuration
+      - WS_HOST=0.0.0.0
+      - WS_PORT=8765
+
+      # Security (change in production!)
+      - JWT_SECRET=${JWT_SECRET:-change-me-in-production}
+      - AUTH_ENABLED=${AUTH_ENABLED:-false}
+      - TLS_ENABLED=false
+
+      # Logging
+      - LOG_LEVEL=${LOG_LEVEL:-INFO}
+
+      # Monitoring
+      - HEARTBEAT_INTERVAL=30
+    restart: unless-stopped
+
+    # Optional: depend on OpenClaw Gateway
+    # depends_on:
+    #   - openclaw-gateway
+
+    # Health check
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8765/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 10s
+
+    # Resource limits
+    deploy:
+      resources:
+        limits:
+          cpus: '0.5'
+          memory: 256M
+        reservations:
+          cpus: '0.1'
+          memory: 64M
