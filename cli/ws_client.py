@@ -132,6 +132,9 @@ class SSEClient:
         """Establish SSE connection."""
         logger.info(f"Connecting to {self.uri}...")
 
+        # Initialize current event buffer
+        self._current_event = {}
+
         # Use aiohttp for async HTTP streaming
         try:
             import aiohttp
@@ -156,6 +159,7 @@ class SSEClient:
                     # Notify connect callbacks
                     for callback in self._connect_callbacks:
                         try:
+                            logger.debug(f"Calling connect callback: {callback.__name__ if hasattr(callback, '__name__') else 'anonymous'}")
                             callback()
                         except Exception as e:
                             logger.error(f"Error in connect callback: {e}")
@@ -255,11 +259,13 @@ class SSEClient:
 
     def _dispatch_event(self, event: dict) -> None:
         """Dispatch an SSE event to callbacks."""
+        logger.debug(f"Dispatching event: type={event.get('type')}, data_preview={str(event.get('data', '{}'))[:100]}")
         try:
             data_str = event.get("data", "{}")
             data = json.loads(data_str)
             self._messages_received += 1
             self._last_message_time = datetime.utcnow()
+            logger.info(f"Event dispatched: type={data.get('type', 'unknown')}")
 
             # Notify event callbacks
             for callback in self._event_callbacks:
@@ -281,18 +287,17 @@ class SSEClient:
 
         line = line.decode("utf-8").strip() if isinstance(line, bytes) else line.strip()
 
-        logger.debug(f"SSE line: '{line}'")
-
         if not line:
             # End of event - dispatch
-            logger.debug(f"Dispatching event: {getattr(self, '_current_event', {})}")
-            if hasattr(self, "_current_event") and self._current_event:
+            if hasattr(self, "_current_event") and self._current_event and self._current_event.get("data"):
+                logger.debug(f"End of event, dispatching: {self._current_event}")
                 self._dispatch_event(self._current_event)
-                self._current_event = {}
+            self._current_event = {}
             return
 
         if line.startswith(":"):
-            # Comment/heartbeat - ignore
+            # Comment/heartbeat - log it
+            logger.debug("SSE heartbeat received")
             return
 
         if ":" in line:
@@ -305,10 +310,10 @@ class SSEClient:
 
             if key == "event":
                 self._current_event["type"] = value
-                logger.debug(f"Event type: {value}")
+                logger.debug(f"SSE event type: {value}")
             elif key == "data":
                 self._current_event["data"] = value
-                logger.debug(f"Event data: {value[:100]}...")
+                logger.debug(f"SSE data received: {value[:200]}...")
             elif key == "id":
                 self._current_event["id"] = value
             elif key == "retry":
@@ -385,6 +390,7 @@ class StateClient:
 
     def _handle_event(self, data: dict) -> None:
         """Handle incoming event."""
+        logger.debug(f"Handling event: {data.get('type', 'unknown')}")
         event_type = data.get("type", "")
 
         if event_type == "sync":
@@ -392,7 +398,7 @@ class StateClient:
             # Format: {"type": "sync", "states": {agent_id: state_data}}
             # For single-agent mode, we just need the state (agent_id is not relevant)
             states = data.get("states", {})
-            logger.info(f"Received sync: {len(states)} states")
+            logger.info(f"Received sync event: {len(states)} states - {list(states.keys())}")
             for agent_id, state_data in states.items():
                 # state_data has nested structure: {data: {state: "...", ...}}
                 if isinstance(state_data, dict):

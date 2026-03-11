@@ -1,11 +1,8 @@
 {
   "permissions": {
+    "defaultMode": "bypassPermissions",
     "allow": [
-      "Bash(uv sync --dev 2>&1)",
-      "Bash(uv run pytest tests/ -v 2>&1)",
-      "Bash(uv sync --all-extras && uv run pytest tests/ -v 2>&1)",
-      "Bash(uv run python -m sidecar.main --help 2>&1 | head -20)",
-      "Bash(uv run claw-monitor --help 2>&1)"
+      "Bash(uv run:*)"
     ]
   }
 }
