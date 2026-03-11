@@ -401,6 +401,9 @@ class OpenClawErrorRule(Rule):
     Matches logs like:
     - "ERROR: Something went wrong"
     - "[ERROR] Exception in handler"
+
+    Note: This only matches ERROR at the START of a line or after specific
+    prefixes to avoid false positives from log content that mentions "error".
     """
 
     VERSION = "1.0"
@@ -411,18 +414,30 @@ class OpenClawErrorRule(Rule):
         return "openclaw_error"
 
     def match(self, line: str) -> Optional[Event]:
-        # Match various ERROR patterns
+        # Only match ERROR patterns at line start or with specific prefixes
+        # This avoids false positives from log content that contains "error"
         patterns = [
-            r"\bERROR\b[:\s]+(.*)",
-            r"\[ERROR\]\s*(.*)",
-            r"\bFATAL\b[:\s]+(.*)",
-            r"\bCRITICAL\b[:\s]+(.*)",
+            r"^\s*ERROR\s*[:：]\s*(.*)",           # ERROR: at line start
+            r"^\s*\[ERROR\]\s*(.*)",               # [ERROR] at line start
+            r"^\s*FATAL\s*[:：]\s*(.*)",           # FATAL: at line start
+            r"^\s*\[FATAL\]\s*(.*)",               # [FATAL] at line start
+            r"^\s*CRITICAL\s*[:：]\s*(.*)",        # CRITICAL: at line start
+            r"^\s*\[CRITICAL\]\s*(.*)",            # [CRITICAL] at line start
+            r"\[gateway\].*ERROR",                  # [gateway] ... ERROR
+            r"Exception\s*:",                       # Exception: ...
+            r"Traceback\s*\(most recent call last\)",  # Python traceback
         ]
 
         for pattern in patterns:
             match = re.search(pattern, line, re.IGNORECASE)
             if match:
-                error_detail = match.group(1).strip() if match.group(1) else "Unknown error"
+                # Get error detail if available
+                error_detail = ""
+                if match.lastindex and match.group(match.lastindex):
+                    error_detail = match.group(match.lastindex).strip()
+                if not error_detail:
+                    error_detail = line.strip()[:200]
+
                 return Event(
                     event_type="error",
                     state="ERROR",
