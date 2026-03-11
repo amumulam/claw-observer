@@ -116,6 +116,7 @@ class Sidecar:
             self._log_reader = MultiAgentLogReader(
                 base_path=self.config.openclaw_base_path,
                 agent_ids=agent_ids,
+                on_agent_discovered=lambda agent_id: self._ws_server.init_agent_state(agent_id, "IDLE"),
             )
             logger.info(f"Monitoring agents at: {self.config.openclaw_base_path}")
         else:

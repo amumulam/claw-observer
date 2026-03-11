@@ -521,6 +521,27 @@ class SSEServer:
         event.agent_id = agent_id
         self.push_event(event)
 
+    def init_agent_state(self, agent_id: str, state: str = "IDLE") -> None:
+        """
+        Initialize an agent's state.
+
+        Called when a new agent is discovered, before any events are received.
+        """
+        if agent_id not in self._current_states:
+            from datetime import datetime, timezone
+            initial_event = {
+                "type": "state_change",
+                "timestamp": datetime.now(timezone.utc).isoformat(),
+                "instance_id": "openclaw-gateway-1",
+                "data": {
+                    "state": state,
+                    "previous_state": None,
+                },
+                "agent_id": agent_id,
+            }
+            self._current_states[agent_id] = initial_event
+            logger.info(f"Initialized agent {agent_id} state to {state}")
+
     async def health_check(self) -> Dict[str, Any]:
         """Get health check status."""
         return {

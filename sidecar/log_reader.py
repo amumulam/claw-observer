@@ -13,6 +13,7 @@ import asyncio
 import subprocess
 import sys
 import os
+from typing import Optional, Callable
 import logging
 from abc import ABC, abstractmethod
 from typing import AsyncIterator, Optional
@@ -190,11 +191,13 @@ class MultiAgentLogReader(LogReader):
         agent_ids: Optional[list[str]] = None,
         buffer_size: int = 1024,
         scan_interval: float = 5.0,
+        on_agent_discovered: Optional[Callable[[str], None]] = None,
     ):
         self.base_path = base_path
         self.agent_ids = agent_ids  # If None, auto-discover
         self.buffer_size = buffer_size
         self.scan_interval = scan_interval
+        self.on_agent_discovered = on_agent_discovered
 
         self._readers: dict[str, dict[str, SessionFileReader]] = {}  # {agent_id: {session_id: reader}}
         self._tasks: list[asyncio.Task] = []
@@ -218,6 +221,9 @@ class MultiAgentLogReader(LogReader):
                         if os.path.isdir(sessions_dir):
                             discovered.append(name)
                             logger.info(f"Discovered agent: {name}")
+                            # Notify callback when agent is discovered
+                            if self.on_agent_discovered:
+                                self.on_agent_discovered(name)
         except Exception as e:
             logger.error(f"Error discovering agents: {e}")
 
