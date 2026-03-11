@@ -281,8 +281,11 @@ class SSEClient:
 
         line = line.decode("utf-8").strip() if isinstance(line, bytes) else line.strip()
 
+        logger.debug(f"SSE line: '{line}'")
+
         if not line:
             # End of event - dispatch
+            logger.debug(f"Dispatching event: {getattr(self, '_current_event', {})}")
             if hasattr(self, "_current_event") and self._current_event:
                 self._dispatch_event(self._current_event)
                 self._current_event = {}
@@ -302,8 +305,10 @@ class SSEClient:
 
             if key == "event":
                 self._current_event["type"] = value
+                logger.debug(f"Event type: {value}")
             elif key == "data":
                 self._current_event["data"] = value
+                logger.debug(f"Event data: {value[:100]}...")
             elif key == "id":
                 self._current_event["id"] = value
             elif key == "retry":
@@ -384,11 +389,17 @@ class StateClient:
 
         if event_type == "sync":
             # Handle sync event - receive all current states
-            sync_data = data.get("data", {})
-            states = sync_data.get("states", {})
+            # Format: {"type": "sync", "states": {agent_id: state_data}}
+            # For single-agent mode, we just need the state (agent_id is not relevant)
+            states = data.get("states", {})
             logger.info(f"Received sync: {len(states)} states")
             for agent_id, state_data in states.items():
-                new_state = state_data.get("state", "")
+                # state_data has nested structure: {data: {state: "...", ...}}
+                if isinstance(state_data, dict):
+                    inner_data = state_data.get("data", {})
+                    new_state = inner_data.get("state", "") if isinstance(inner_data, dict) else ""
+                else:
+                    new_state = ""
                 if new_state:
                     self._current_state = new_state
                     for callback in self._state_callbacks:
@@ -398,10 +409,11 @@ class StateClient:
                             logger.error(f"Error in sync callback: {e}")
 
         elif event_type == "state_change":
-            event_data = data.get("data", {})
-            new_state = event_data.get("state", "")
-            previous_state = event_data.get("previous_state", "")
-            meta = event_data.copy()
+            # Format: {"type": "state_change", "data": {"state": "...", ...}}
+            inner_data = data.get("data", {})
+            new_state = inner_data.get("state", "") if isinstance(inner_data, dict) else ""
+            previous_state = inner_data.get("previous_state", "") if isinstance(inner_data, dict) else ""
+            meta = inner_data.copy() if isinstance(inner_data, dict) else {}
             meta.pop("state", None)
             meta.pop("previous_state", None)
 
@@ -480,12 +492,17 @@ class MultiAgentStateClient:
 
         if event_type == "sync":
             # Handle sync event - receive all current states
-            # Format: {"type": "sync", "data": {"states": {agent_id: state_data}, "timestamp": "..."}}
-            sync_data = data.get("data", {})
-            states = sync_data.get("states", {})
+            # Format: {"type": "sync", "states": {agent_id: state_data}}
+            # where state_data = {"type": "state_change", ..., "data": {"state": "..."}, "agent_id": "..."}
+            states = data.get("states", {})
             logger.info(f"Received sync: {len(states)} agent states - {list(states.keys())}")
             for agent_id, state_data in states.items():
-                new_state = state_data.get("state", "") if isinstance(state_data, dict) else ""
+                # state_data has nested structure: {data: {state: "...", ...}}
+                if isinstance(state_data, dict):
+                    inner_data = state_data.get("data", {})
+                    new_state = inner_data.get("state", "") if isinstance(inner_data, dict) else ""
+                else:
+                    new_state = ""
                 if new_state:
                     self._agent_states[agent_id] = new_state
                     logger.info(f"  Agent {agent_id}: {new_state}")
@@ -496,13 +513,13 @@ class MultiAgentStateClient:
                             logger.error(f"Error in sync callback: {e}")
 
         elif event_type == "state_change":
-            # Format: {"type": "state_change", "agent_id": "xxx", "data": {...}}
-            event_data = data.get("data", {})
+            # Format: {"type": "state_change", "agent_id": "xxx", "data": {"state": "...", ...}}
             agent_id = data.get("agent_id", "default")
+            inner_data = data.get("data", {})
 
-            new_state = event_data.get("state", "")
-            previous_state = event_data.get("previous_state", "")
-            meta = event_data.copy()
+            new_state = inner_data.get("state", "") if isinstance(inner_data, dict) else ""
+            previous_state = inner_data.get("previous_state", "") if isinstance(inner_data, dict) else ""
+            meta = inner_data.copy() if isinstance(inner_data, dict) else {}
             meta.pop("state", None)
             meta.pop("previous_state", None)
 

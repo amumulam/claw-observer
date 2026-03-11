@@ -154,7 +154,7 @@ class TestCreateOpenClawRules:
         rules = create_openclaw_rules()
 
         assert isinstance(rules, list)
-        assert len(rules) == 7  # We have 7 rules
+        assert len(rules) == 11  # We have 11 rules (4 JSONL + 7 legacy text-based)
 
     def test_all_rules_have_unique_names(self):
         rules = create_openclaw_rules()

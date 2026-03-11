@@ -104,6 +104,8 @@ class StateRenderer:
     def set_connection_status(self, status: str) -> None:
         """Set connection status (connected/disconnected/reconnecting)."""
         self._connection_status = status
+        if self._live:
+            self._live.update(self._render())
 
     def set_tool_details(self, tool_name: str, action: str, params: Optional[Dict] = None) -> None:
         """Set tool execution details."""
@@ -348,6 +350,8 @@ class MultiAgentStateRenderer:
     def set_connection_status(self, status: str) -> None:
         """Set connection status (connected/disconnected/reconnecting)."""
         self._connection_status = status
+        if self._live:
+            self._live.update(self._render())
 
     def _get_state_style(self, state: str) -> Style:
         """Get the style for a state."""
